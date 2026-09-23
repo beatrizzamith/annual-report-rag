@@ -2,7 +2,6 @@
 name = "annual-report-rag"
 version = "0.1.0"
 description = "RAG assistant for analysing annual reports (FTE, sustainability goals, cited Q&A)"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -13,7 +12,6 @@ dependencies = [
     "openai>=1.40",
     "pymupdf>=1.24",
     "numpy>=2.0",
-    "docling>=2.129.0",
 ]
 
 [dependency-groups]
