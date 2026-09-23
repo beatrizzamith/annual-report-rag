@@ -1,0 +1,28 @@
+.env
+data/
+SPEC.md
+run.ps1
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+
+# Stray local artifacts (should always live under data/, not loose in backend/)
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+backend/tmp_*.pdf

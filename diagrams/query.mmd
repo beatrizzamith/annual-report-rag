@@ -1,0 +1,29 @@
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant FE as Frontend
+  participant API as FastAPI
+  participant DB as SQLite (FTS5 + vectors)
+  participant L as LLM API
+  participant V as Verifier (code)
+
+  U->>FE: Ask question
+  FE->>API: POST /api/chat (UI shows spinner)
+  opt Follow-up (there is chat history)
+    API->>L: Rewrite the message as a standalone question (last 2 messages)
+    L-->>API: Standalone question (raw message if the call fails)
+  end
+  API->>API: Scope: report(s) whose company is named in the question, else all
+  API->>L: Embed the standalone question
+  L-->>API: Query vector
+  API->>DB: BM25 top 20 + cosine top 20 (scoped chunks)
+  DB-->>API: Candidates
+  API->>API: Reciprocal Rank Fusion, keep top 8
+  API->>API: Assemble context: dedupe, token budget, tags S1..Sn
+  API->>L: System rules + sources + last 2 messages + question
+  L-->>API: JSON: status, answer, citations with quotes
+  API->>V: Is each quote a substring of its source? Is value in quote (when the citation has one)?
+  V-->>API: Verified or unverified per citation
+  API->>DB: Persist user and assistant messages with citations
+  API-->>FE: ChatResponse JSON
+  FE-->>U: Answer + verbatim quotes + page numbers

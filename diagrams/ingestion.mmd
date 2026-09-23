@@ -1,0 +1,26 @@
+flowchart TB
+  subgraph S1["Intake"]
+    direction LR
+    A["Upload PDF<br/>+ company + year"] --> B{"Valid PDF?<br/>SHA-256 known?"}
+    B -->|"known and ready"| B2["Return existing report"]
+    B -->|"new, or known but failed"| C["Store file, create or reset<br/>report (processing)"]
+  end
+
+  subgraph S2["Build the index"]
+    direction LR
+    D["1. Parse pages<br/>text blocks + tables,<br/>page numbers kept"] --> F["2. Chunk<br/>paragraphs, tables whole,<br/>raw text stored"]
+    F --> G["3. Embed<br/>batched"] --> H["4. Index<br/>SQLite + FTS5 + vectors"]
+  end
+
+  subgraph S3["5. Pre-extraction (FTE, sustainability goals)"]
+    direction LR
+    I1["Targeted hybrid<br/>retrieval per field"] --> I2["LLM structured output<br/>value, quote, page"]
+    I2 --> I3{"Quote verbatim in source<br/>and number in quote?"}
+    I3 -->|"yes"| I4["Save: verified"]
+    I3 -->|"no"| I5["Save: unverified"]
+  end
+
+  C --> D
+  H --> I1
+  I4 --> J["Report ready"]
+  I5 --> J
