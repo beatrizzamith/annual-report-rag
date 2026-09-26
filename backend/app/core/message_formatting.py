@@ -6,24 +6,25 @@ assistant text without including older source excerpts.
 
 from app.db.models import Message
 
-MAX_MESSAGES = 4
 MAX_CHARS_PER_MESSAGE = 500
 
 
 def format_recent_messages(messages: list[Message]) -> str:
     """Renders recent chat messages as plain "Role: text" lines.
 
+    How many messages to include is the caller's decision (see
+    `RECENT_MESSAGES_LIMIT` in `app.answer.service`), so this does not cap
+    the count a second time.
+
     Args:
-        messages: Chat history, oldest first. Only the last `MAX_MESSAGES`
-            are used; each message's text is truncated to
-            `MAX_CHARS_PER_MESSAGE` characters.
+        messages: Chat history, oldest first. Each message's text is
+            truncated to `MAX_CHARS_PER_MESSAGE` characters.
 
     Returns:
         The formatted history, or an empty string if `messages` is empty.
     """
-    selected_messages = messages[-MAX_MESSAGES:]
     formatted_lines = []
-    for message in selected_messages:
+    for message in messages:
         role = "User" if message.role == "user" else "Assistant"
         text = message.content[:MAX_CHARS_PER_MESSAGE]
         formatted_lines.append(f"{role}: {text}")

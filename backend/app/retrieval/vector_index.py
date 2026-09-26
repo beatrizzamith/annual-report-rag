@@ -30,18 +30,18 @@ class VectorIndex:
         return len(self._ids)
 
     @staticmethod
-    def _normalize(vec: np.ndarray) -> np.ndarray:
+    def _normalize(vector: np.ndarray) -> np.ndarray:
         """L2-normalises a vector while guarding against division by zero.
 
         Args:
-            vec: A vector to normalise.
+            vector: A vector to normalise.
 
         Returns:
-            `vec` scaled to unit length, or the original vector if it is the
-            zero vector.
+            `vector` scaled to unit length, or the original vector if it is
+            the zero vector.
         """
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
+        norm = np.linalg.norm(vector)
+        return vector / norm if norm > 0 else vector
 
     def add(self, chunk_id: int, embedding: list[float]) -> None:
         """Adds one chunk's embedding to the index.
@@ -59,12 +59,9 @@ class VectorIndex:
     def add_many(self, chunk_ids: list[int], embeddings: list[list[float]]) -> None:
         """Adds several chunk embeddings to the index in one batch.
 
-        Normalises and appends every embedding with a single matrix
-        reallocation, rather than one per embedding (see `add`). This is
-        the path `build_vector_index` (app startup) and `embed_and_index_report`
-        (ingestion) must use for anything but a single chunk: with several
-        thousand chunks now indexed, one-`add`-per-chunk turned app startup
-        into an O(N^2) matrix rebuild, which is what made it slow to load.
+        Appends every embedding with a single matrix reallocation instead of
+        one per embedding (see `add`). Use this for anything but a single
+        chunk: adding thousands one at a time is O(N^2) and made startup slow.
 
         Args:
             chunk_ids: The chunk ids.

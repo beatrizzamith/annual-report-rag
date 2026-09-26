@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 
 from app.config import Settings
+from app.db.models import Report
 from app.db.repositories import ChunksRepo, ExtractionsRepo, ReportsRepo
 from app.extraction.fte import extract_fte
 from app.extraction.goals import extract_goals
@@ -158,13 +159,10 @@ def _extract(
 ) -> None:
     """Runs the FTE and sustainability-goal extraction pass for one report.
 
-    Run one after the other, not concurrently: both read through
-    `chunks_repo`/`vector_index` on the same `sqlite3.Connection`, and
-    despite `check_same_thread=False`, Python's sqlite3 module is not safe
-    for concurrent statement execution from two threads on one connection
-    (confirmed by a real `sqlite3.InterfaceError` when this was tried).
-    Concurrency is instead applied inside `extract_goals`, across its
-    map-reduce batches' LLM calls, which don't touch the database.
+    The two run one after the other, not concurrently: both use the same
+    `sqlite3.Connection`, which is not safe for concurrent statements from
+    two threads. `extract_goals` parallelises only its LLM calls, which never
+    touch the database.
 
     Args:
         report_id: The report being ingested.
@@ -182,6 +180,46 @@ def _extract(
         report_id, report_fiscal_year, chunks_repo, vector_index, llm, extractions_repo, model_name
     )
     reports_repo.update_progress(report_id, "extract", 1.0)
+
+
+def _run_stages(
+    report: Report,
+    settings: Settings,
+    conn: sqlite3.Connection,
+    vector_index: VectorIndex,
+    llm: LLMClient,
+) -> None:
+    """Runs parse-and-chunk, embed and extract in order, then marks the report ready.
+
+    Args:
+        report: The report to ingest; its PDF must already be stored.
+        settings: Application settings, including the PDF directory and chat
+            model name.
+        conn: The shared SQLite connection.
+        vector_index: The shared in-memory index new embeddings are added to.
+        llm: The LLM client used for embedding and extraction calls.
+    """
+    reports_repo = ReportsRepo(conn)
+    chunks_repo = ChunksRepo(conn)
+    pdf_path = settings.pdfs_dir / f"{report.sha256}.pdf"
+
+    _parse_and_chunk(
+        report.id, pdf_path, report.company, report.fiscal_year, reports_repo, chunks_repo
+    )
+    _log_stage_complete(report.id, "parse_and_chunk")
+    _embed(report.id, reports_repo, chunks_repo, vector_index, llm)
+    _log_stage_complete(report.id, "embed")
+    _extract(
+        report.id,
+        report.fiscal_year,
+        reports_repo,
+        chunks_repo,
+        vector_index,
+        llm,
+        ExtractionsRepo(conn),
+        settings.chat_model,
+    )
+    reports_repo.mark_ready(report.id)
 
 
 def run_ingestion(
@@ -207,9 +245,6 @@ def run_ingestion(
         llm: The LLM client used for embedding and extraction calls.
     """
     reports_repo = ReportsRepo(conn)
-    chunks_repo = ChunksRepo(conn)
-    extractions_repo = ExtractionsRepo(conn)
-
     report = reports_repo.get(report_id)
     if report is None:
         logger.error(
@@ -217,7 +252,6 @@ def run_ingestion(
         )
         return
 
-    pdf_path = settings.pdfs_dir / f"{report.sha256}.pdf"
     logger.info(
         "ingestion started",
         extra={
@@ -225,44 +259,31 @@ def run_ingestion(
                 "report_id": report_id,
                 "company": report.company,
                 "fiscal_year": report.fiscal_year,
-                "pdf_path": str(pdf_path),
             }
         },
     )
-
     started_at = time.monotonic()
     with INGESTION_LOCK:
         try:
-            _parse_and_chunk(
-                report_id, pdf_path, report.company, report.fiscal_year, reports_repo, chunks_repo
-            )
-            _log_stage_complete(report_id, "parse_and_chunk")
-            _embed(report_id, reports_repo, chunks_repo, vector_index, llm)
-            _log_stage_complete(report_id, "embed")
-            _extract(
-                report_id,
-                report.fiscal_year,
-                reports_repo,
-                chunks_repo,
-                vector_index,
-                llm,
-                extractions_repo,
-                settings.chat_model,
-            )
-            reports_repo.mark_ready(report_id)
-            elapsed = time.monotonic() - started_at
-            logger.info(
-                "ingestion complete",
-                extra={
-                    "extra_fields": {"report_id": report_id, "elapsed_seconds": round(elapsed, 3)}
-                },
-            )
+            _run_stages(report, settings, conn, vector_index, llm)
         except Exception as exc:
-            elapsed = time.monotonic() - started_at
             logger.exception(
                 "ingestion failed",
                 extra={
-                    "extra_fields": {"report_id": report_id, "elapsed_seconds": round(elapsed, 3)}
+                    "extra_fields": {
+                        "report_id": report_id,
+                        "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                    }
                 },
             )
             reports_repo.mark_failed(report_id, str(exc))
+            return
+    logger.info(
+        "ingestion complete",
+        extra={
+            "extra_fields": {
+                "report_id": report_id,
+                "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            }
+        },
+    )

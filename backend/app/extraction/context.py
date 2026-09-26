@@ -33,9 +33,6 @@ def build_source_context(chunks: list[Chunk]) -> tuple[str, dict[str, int]]:
     source_map = {}
     for index, chunk in enumerate(chunks, start=1):
         source_id = f"S{index}"
-        # The model returns a source tag like "S3"; this map restores the
-        # original chunk id so a later verification step can point back to the
-        # exact text that produced the extracted fact.
         source_map[source_id] = chunk.id
         blocks.append(
             f'<source id="{source_id}" pages="{_page_label(chunk)}" kind="{chunk.kind}">\n'

@@ -4,6 +4,7 @@ import logging
 
 from pydantic import BaseModel
 
+from app.core.errors import LLMAuthFailedError, LLMRateLimitedError, LLMUnavailableError
 from app.core.message_formatting import format_recent_messages
 from app.core.prompts import load_prompt
 from app.db.models import Message
@@ -47,7 +48,7 @@ def rewrite_followup(
 
     try:
         result = llm.complete_structured(system_prompt, user_prompt, FollowUpRewrite, temperature=0)
-    except Exception as exc:
+    except (LLMAuthFailedError, LLMRateLimitedError, LLMUnavailableError) as exc:
         logger.warning(
             "follow-up rewrite failed, using raw message",
             extra={"extra_fields": {"error": str(exc)}},

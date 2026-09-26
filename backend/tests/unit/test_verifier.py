@@ -144,7 +144,7 @@ def test_verification_is_tolerant_of_punctuation_it_was_never_specifically_fixed
     # a quote that truncates right before a trailing footnote marker --
     # still a clean word-boundary prefix, unlike a footnote digit glued
     # directly onto the preceding word with no space (a known, still-
-    # rejected residual gap, documented in SPEC.md).
+    # rejected residual gap).
     source = "Revenue grew 12%; driven by strong demand in Europe [3]."
     quote = "Revenue grew 12%, driven by strong demand in Europe."
     assert verify_quote(quote, source) is True

@@ -1,12 +1,8 @@
 """Extracts sustainability goals and their supporting metadata.
 
-Reports typically dedicate an entire chapter, spanning dozens of pages, to
-sustainability goals and targets -- far more than a handful of top-ranked
-chunks can cover. So instead of one extraction call over a small retrieved
-set, this gathers every chunk that plausibly belongs to that chapter and
-extracts from all of them in batches (map), then merges and deduplicates the
-results (reduce). See SPEC.md section 16.1, "Map-reduce over every
-sustainability chunk", and the decision log entry it revises.
+Goals span a whole chapter, more than a few top-ranked chunks can cover, so
+this gathers every plausible chunk and extracts from them in batches (map),
+then merges and deduplicates the results (reduce).
 """
 
 import json
@@ -39,15 +35,10 @@ QUERIES = [
     "sustainability strategy goals",
 ]
 SEMANTIC_TOP_K_PER_QUERY = 20
-# Wider than a single-call design needs: this is one of two nets cast for
-# candidates (see `_candidate_chunks`), not the final chunk set.
 SEMANTIC_FINAL_TOP_K = 40
 
-# Chunks mentioning any of these are treated as plausibly part of the
-# sustainability chapter and extracted from exhaustively, rather than
-# relying on ranked retrieval alone. Goals are often phrased without
-# "target" ("we aim to...", "our ambition is..."), so topic terms are the
-# more reliable net, at the cost of some batches yielding no goal.
+# Chunks mentioning these terms count as sustainability content. Goals are often
+# phrased without "target" ("we aim to..."), so topic terms catch more of them.
 _SUSTAINABILITY_TERMS = re.compile(
     r"\b("
     r"sustainab\w*|climate|emissions?|carbon|co2e?|scope\s*[123]\b|renewable|"
@@ -57,26 +48,19 @@ _SUSTAINABILITY_TERMS = re.compile(
     re.IGNORECASE,
 )
 
-MAX_CANDIDATE_CHUNKS = 150  # bounds cost: one extraction call per BATCH_SIZE chunks
+MAX_CANDIDATE_CHUNKS = 150 
 BATCH_SIZE = 10
 MAX_GOALS = 60
-# Batches are independent extraction calls (each over its own chunks), so
-# they run concurrently -- otherwise a 150-chunk candidate set means 15
-# sequential network round trips. Bounded well under the batch count so a
-# large report doesn't fire off dozens of requests at once and trip the
-# provider's rate limit; `_call_with_retries` still backs off if it does.
+# Batches are independent, so they run concurrently instead of as ~15 sequential
+# round trips. Capped so a large report doesn't trip the provider's rate limit.
 MAX_CONCURRENT_BATCHES = 5
 
 _WHITESPACE_AND_HYPHENS = re.compile(r"[\s\-]+")
 
-ScoredGoal = tuple[SustainabilityGoal, Chunk]  # a goal paired with the chunk it was extracted from
+ScoredGoal = tuple[SustainabilityGoal, Chunk]
 
-# How similar two goals' (title + target) text must be, after normalising
-# away spacing/hyphenation noise, to be treated as the same commitment
-# restated in different words. Tuned against a real case: three batches
-# independently titled the same "net-zero by 2050" commitment "Net-zero
-# economy alignment", "Net-zero emissions economy" and "Net-zero emissions
-# by 2050" -- all score well above this threshold against each other.
+# Minimum similarity of two goals' (title + target) text for them to count as
+# the same commitment worded differently. Tuned on real restated goals.
 _DUPLICATE_SIMILARITY_THRESHOLD = 0.6
 
 
@@ -96,7 +80,7 @@ def _dedupe_text(goal: SustainabilityGoal) -> str:
     return _WHITESPACE_AND_HYPHENS.sub("", combined)
 
 
-def _are_likely_duplicates(a: SustainabilityGoal, b: SustainabilityGoal) -> bool:
+def _are_likely_duplicates(first_goal: SustainabilityGoal, second_goal: SustainabilityGoal) -> bool:
     """Checks whether two goals are probably the same commitment, reworded.
 
     Gated on an exact category and target-year match first, so two
@@ -105,29 +89,29 @@ def _are_likely_duplicates(a: SustainabilityGoal, b: SustainabilityGoal) -> bool
     titles overlap.
 
     Args:
-        a: A goal to compare.
-        b: Another goal to compare it against.
+        first_goal: A goal to compare.
+        second_goal: Another goal to compare it against.
 
     Returns:
-        True if `a` and `b` share a category and target year, and their
+        True if both goals share a category and target year, and their
         title-plus-target text is at least `_DUPLICATE_SIMILARITY_THRESHOLD`
         similar.
     """
-    if a.category != b.category or a.target_year != b.target_year:
+    if (
+        first_goal.category != second_goal.category
+        or first_goal.target_year != second_goal.target_year
+    ):
         return False
-    ratio = SequenceMatcher(None, _dedupe_text(a), _dedupe_text(b)).ratio()
+    ratio = SequenceMatcher(None, _dedupe_text(first_goal), _dedupe_text(second_goal)).ratio()
     return ratio >= _DUPLICATE_SIMILARITY_THRESHOLD
 
 
 def _dedupe(scored_goals: list[ScoredGoal]) -> list[ScoredGoal]:
     """Removes duplicate goals, keeping the best-evidenced version of each.
 
-    The same goal can surface from more than one batch (e.g. restated in an
-    intro paragraph and again in a detail table, extracted by two different
-    map-reduce batches with no visibility into each other's output), each
-    time with its own independently-worded title -- so this compares goals
-    by fuzzy similarity, not exact title equality, entirely in code with no
-    extra model call.
+    Batches can't see each other, so one goal restated in two places comes
+    back with two different titles. Goals are compared by fuzzy similarity,
+    not exact title, in code with no extra model call.
 
     Args:
         scored_goals: Goals extracted by the model, each paired with its
@@ -169,24 +153,18 @@ def _rank(scored_goals: list[ScoredGoal]) -> list[ScoredGoal]:
 def _is_still_open(goal: SustainabilityGoal, report_fiscal_year: int) -> bool:
     """Checks whether a goal's target year could still be in the future.
 
-    A code-level backstop for `extract_goals.md`'s instruction to skip
-    fulfilled commitments: the prompt asks the model to recognise phrasing
-    like "which we have delivered on", but a report is always published
-    after the fiscal year it covers ends, so any target dated to that year
-    or earlier has necessarily already passed -- checkable deterministically,
-    without relying on the model to catch every way a report might phrase
-    "done". A goal with no `target_year` (an ongoing, not year-bound
-    commitment) is always kept.
+    A deterministic backstop for the prompt's "skip fulfilled commitments"
+    rule: a report is published after its fiscal year ends, so a target dated
+    to that year or earlier has already passed. A goal with no `target_year`
+    is always kept.
 
     Args:
         goal: A goal the model extracted.
         report_fiscal_year: The report's own fiscal year.
 
     Returns:
-        False only for a goal with a `target_year` at or before
-        `report_fiscal_year` -- its deadline has already passed by the time
-        this report was published, so it is a track record, not an open
-        commitment.
+        False only for a goal whose `target_year` is at or before
+        `report_fiscal_year`.
     """
     return goal.target_year is None or goal.target_year > report_fiscal_year
 
@@ -199,11 +177,9 @@ def _candidate_chunks(
 ) -> list[Chunk]:
     """Gathers every chunk that plausibly belongs to the sustainability chapter.
 
-    Unions a keyword pass over the whole report (catches goal phrasings
-    that avoid common domain terms) with a semantic search pass (catches
-    goal phrasings that avoid the keyword list), so the candidate set
-    approximates the whole chapter rather than a handful of top-ranked
-    chunks.
+    Unions a keyword pass over the whole report with a semantic search pass,
+    so the set approximates the whole chapter rather than a few top-ranked
+    chunks. Each pass catches phrasings the other misses.
 
     Args:
         report_id: The report to gather candidates from.
@@ -333,7 +309,9 @@ def extract_goals(
         extract = partial(_extract_batch, system_prompt=system_prompt, llm=llm)
         batch_results = executor.map(extract, batches)
     scored_goals = [pair for pairs in batch_results for pair in pairs]
-    open_goals = [(g, c) for g, c in scored_goals if _is_still_open(g, report_fiscal_year)]
+    open_goals = [
+        (goal, chunk) for goal, chunk in scored_goals if _is_still_open(goal, report_fiscal_year)
+    ]
 
     ranked = _rank(_dedupe(open_goals))[:MAX_GOALS]
 

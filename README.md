@@ -86,6 +86,24 @@ A FastAPI backend, a React/Vite frontend, and SQLite with FTS5 for the keyword i
 
 A set of test questions, generated from the reports' own content, is run through the real pipeline end-to-end to measure whether retrieval finds the right evidence and whether answers stay grounded in it — alongside the unit and integration test suite (see Testing below), which exercises the pipeline's individual pieces offline.
 
+Latest run: 28 questions across all six ingested reports (24 from text passages, 4 from tables). The questions and per-question results are in [`backend/eval/results/`](backend/eval/results/).
+
+| Metric | Result |
+|---|---|
+| Retrieval hit (right passage was retrieved) | 23 / 28 (82%) |
+| Grounded answer (a verified quote backs the expected passage) | 19 / 28 (68%) |
+| Retrieved but not grounded | 4 of 23 |
+| Table questions | 2 / 4 retrieved, 1 / 4 grounded |
+
+Five of the nine failures are retrieval misses, and tables are the weakest case, which fits the known difficulty of parsing dense financial tables. Of the four retrieved questions that were not grounded, two returned the correct answer with a verified quote from a different passage than the one the question was generated from, and two are intermittent: on a re-run the model copies the quote exactly and the same question passes. With only 28 questions, and questions generated from a single passage each, treat these as indicative rather than precise. To reproduce (needs an API key; run from the repo root or `backend/`):
+
+```bash
+uv run --project backend python -m eval.build_gold_set
+uv run --project backend python -m eval.run_eval
+```
+
+`backend/eval/` also holds `compare_chunking.py`, an experiment that compared the paragraph chunker used here with an embedding-based semantic chunker on the same questions; paragraph chunking scored higher, so it stayed.
+
 ## Guardrails
 
 - **Upload validation** — a PDF is checked for its real file signature and a size limit while streaming to disk (never loaded into memory whole), then stored under a content hash rather than a user-supplied filename.
@@ -106,7 +124,7 @@ cd ../frontend
 npm run typecheck
 ```
 
-77 backend tests (unit + integration, all offline via a fake LLM/embedder) plus a generated fixture PDF exercising the real parsing/chunking/table-detection code.
+118 backend tests (unit + integration, all offline via a fake LLM/embedder) plus a generated fixture PDF exercising the real parsing/chunking/table-detection code.
 
 ## Known limitations
 

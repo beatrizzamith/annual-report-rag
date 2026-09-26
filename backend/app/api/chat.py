@@ -22,11 +22,19 @@ class ChatRequest(BaseModel):
 
 
 def serialize_chat_result(result: ChatResult) -> dict:
-    """Renders a chat result as the JSON payload returned by the API."""
+    """Renders a chat result as the JSON payload returned by the API.
+
+    Args:
+        result: The answered chat turn to render.
+
+    Returns:
+        A JSON-serialisable dict with the status, answer, citations, caveats
+        and the rewritten standalone question (or None).
+    """
     return {
         "status": result.status,
         "answer": result.answer,
-        "citations": [citation.__dict__ for citation in result.citations],
+        "citations": [citation.model_dump() for citation in result.citations],
         "caveats": result.caveats,
         "interpreted_as": result.interpreted_as,
     }
@@ -85,7 +93,15 @@ def chat(request_body: ChatRequest, state: AppState = Depends(get_state)) -> dic
 
 @router.get("/messages")
 def list_messages(state: AppState = Depends(get_state)) -> list[dict]:
-    """Returns the full chat history in chronological order."""
+    """Returns the full chat history in chronological order.
+
+    Args:
+        state: The shared application state.
+
+    Returns:
+        One dict per stored message, oldest first, with its citations
+        decoded from JSON (None for user messages).
+    """
     messages_repo = MessagesRepo(state.conn)
     messages = messages_repo.list()
     logger.info("chat history requested", extra={"extra_fields": {"count": len(messages)}})

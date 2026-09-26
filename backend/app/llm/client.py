@@ -8,7 +8,7 @@ rate limits and transient errors; raises typed errors on auth failure.
 import logging
 import time
 from functools import partial
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from openai import (
     APIConnectionError,
@@ -72,7 +72,7 @@ class LLMClient(Protocol):
         ...
 
 
-def _call_with_retries(operation: partial, what: str):
+def _call_with_retries(operation: partial, what: str) -> Any:
     """Runs `operation` with retries and typed error translation.
 
     Args:

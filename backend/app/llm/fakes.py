@@ -1,12 +1,8 @@
-"""Fakes for `LLMClient`, used by tests so the whole pipeline runs offline.
+"""Fakes for `LLMClient`, so tests run the whole pipeline offline.
 
-`FakeEmbedder` produces deterministic, semantically-meaningless-but-stable
-vectors from a hashed bag of words, which is enough to test that retrieval
-plumbing (fusion, scoping, budget) works without a real embedding model.
-
-`FakeLLM.complete_structured` returns pre-scripted responses from a queue, so
-a test can assert exactly what the pipeline does with a given model output,
-including "the model returned this fabricated quote" cases.
+`FakeEmbedder` gives deterministic hashed bag-of-words vectors. `FakeLLM`
+returns scripted responses from a queue, so a test controls exactly what the
+"model" says, including fabricated quotes.
 """
 
 from collections import deque
@@ -51,14 +47,14 @@ class FakeEmbedder:
             An L2-normalised vector built from a hashed bag of `text`'s
             lower-cased words.
         """
-        vec = np.zeros(self.dim, dtype=np.float32)
+        vector = np.zeros(self.dim, dtype=np.float32)
         for word in text.lower().split():
-            idx = hash(word) % self.dim
-            vec[idx] += 1.0
-        norm = np.linalg.norm(vec)
+            bucket = hash(word) % self.dim
+            vector[bucket] += 1.0
+        norm = np.linalg.norm(vector)
         if norm > 0:
-            vec /= norm
-        return vec.tolist()
+            vector /= norm
+        return vector.tolist()
 
 
 class FakeLLMError(RuntimeError):

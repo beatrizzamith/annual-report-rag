@@ -1,21 +1,11 @@
-"""Re-checks every stored FTE and sustainability-goal extraction against the
-current `verify_quote`/`verify_extraction` logic, without re-running
-extraction itself.
+"""Re-checks every stored extraction against the current verifier, without re-extracting.
 
     python -m eval.reverify_extractions
 
-A quote and its source chunk are fixed at ingestion time; only the
-verification *rules* change when `app/extraction/verifier.py` is improved.
-Re-running full ingestion (parse, chunk, embed, extract) just to pick up a
-verifier fix wastes an LLM extraction pass and can't change anything the fix
-actually touches -- this reads each stored (quote, chunk_text) pair straight
-from the database, recomputes `verified` with the current code, and updates
-only the rows whose result actually changed.
-
-Runs against the live app database directly (unlike `eval/run_eval.py`,
-which works on a throwaway copy): the whole point is to update real,
-already-ingested rows in place. It never touches `quote`, `payload`, or any
-other stored field -- only `verified`.
+Only the verification rules change when `verifier.py` improves, so this
+recomputes `verified` for each stored (quote, chunk_text) pair and updates just
+the rows that changed. It runs against the live database (unlike `run_eval.py`)
+and never touches any other column.
 """
 
 import json
@@ -23,14 +13,15 @@ import logging
 
 from app.config import get_settings
 from app.db.connection import connect
+from app.db.models import Extraction
 from app.db.repositories import ChunksRepo, ExtractionsRepo
 from app.extraction.verifier import verify_extraction, verify_quote
+from eval.console import configure_console_logging
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _recompute_verified(extraction, chunk_text: str) -> bool:
+def _recompute_verified(extraction: Extraction, chunk_text: str) -> bool:
     """Recomputes one extraction's `verified` flag with the current verifier.
 
     Args:
@@ -50,6 +41,7 @@ def _recompute_verified(extraction, chunk_text: str) -> bool:
 
 def main() -> None:
     """Re-verifies every stored extraction and reports how many flipped."""
+    configure_console_logging(logger)
     settings = get_settings()
     conn = connect(settings.db_path)
     extractions_repo = ExtractionsRepo(conn)
@@ -71,10 +63,10 @@ def main() -> None:
             extractions_repo.update_verified(extraction.id, fresh_verified)
             changed += 1
 
-    print(f"Re-checked {len(extractions)} extraction(s).")
-    print(f"  now verified that weren't, or vice versa: {changed}")
+    logger.info("Re-checked %d extraction(s).", len(extractions))
+    logger.info("  now verified that weren't, or vice versa: %d", changed)
     if skipped_no_chunk:
-        print(f"  skipped (no resolvable source chunk): {skipped_no_chunk}")
+        logger.info("  skipped (no resolvable source chunk): %d", skipped_no_chunk)
 
 
 if __name__ == "__main__":

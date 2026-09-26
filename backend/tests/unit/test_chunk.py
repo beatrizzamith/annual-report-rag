@@ -1,3 +1,5 @@
+"""Tests for packing parsed PDF content into retrieval-sized chunks."""
+
 from app.ingestion.chunk import (
     HARD_MAX_CHARS,
     build_embed_text,
@@ -12,13 +14,21 @@ from app.ingestion.parse import (
 
 
 def _doc(items):
-    page_count = max((i.page for i in items), default=1)
+    page_count = max((item.page for item in items), default=1)
     return ParsedDocument(items=items, page_count=page_count, skipped_pages=[])
 
 
+def _text(page, text, **position):
+    return TextItem(page=page, text=text, **position)
+
+
+def _table(page, header, rows):
+    return TableItem(page=page, header=header, rows=rows)
+
+
 def test_sort_items_for_reading_order_keeps_left_column_before_right_column():
-    left = TextItem(1, "Left-hand introduction.", x0=100.0, y0=100.0, region_index=0)
-    right = TextItem(1, "Right-hand summary.", x0=900.0, y0=100.0, region_index=2)
+    left = _text(1, "Left-hand introduction.", x0=100.0, y0=100.0, region_index=0)
+    right = _text(1, "Right-hand summary.", x0=900.0, y0=100.0, region_index=2)
 
     ordered = _sort_items_for_reading_order([right, left])
 
@@ -29,7 +39,7 @@ def test_sort_items_for_reading_order_keeps_left_column_before_right_column():
 
 
 def test_short_paragraphs_are_packed_into_one_chunk():
-    items = [TextItem(1, "First paragraph."), TextItem(1, "Second paragraph.")]
+    items = [_text(1, "First paragraph."), _text(1, "Second paragraph.")]
     chunks = chunk_document(_doc(items))
     assert len(chunks) == 1
     assert chunks[0].kind == "text"
@@ -40,14 +50,14 @@ def test_short_paragraphs_are_packed_into_one_chunk():
 
 
 def test_chunk_records_correct_page_range_across_a_page_break():
-    items = [TextItem(1, "Page one paragraph."), TextItem(2, "Page two paragraph.")]
+    items = [_text(1, "Page one paragraph."), _text(2, "Page two paragraph.")]
     chunks = chunk_document(_doc(items))
     assert chunks[0].page_start == 1
     assert chunks[0].page_end == 2
 
 
 def test_long_run_of_paragraphs_is_split_into_multiple_chunks():
-    items = [TextItem(1, "word " * 200) for _ in range(10)]  # each ~1000 chars
+    items = [_text(1, "word " * 200) for _ in range(10)]  # each ~1000 chars
     chunks = chunk_document(_doc(items))
     assert len(chunks) > 1
     for chunk in chunks:
@@ -56,7 +66,7 @@ def test_long_run_of_paragraphs_is_split_into_multiple_chunks():
 
 def test_a_single_oversized_paragraph_is_split_with_overlap():
     huge = "word " * 1000  # ~5000 chars, well over the hard max
-    chunks = chunk_document(_doc([TextItem(1, huge)]))
+    chunks = chunk_document(_doc([_text(1, huge)]))
     assert len(chunks) > 1
     # a small overshoot is allowed: splits snap forward to the next word
     # boundary rather than cutting a word in half
@@ -69,7 +79,7 @@ def test_a_single_oversized_paragraph_is_split_with_overlap():
 def test_table_is_never_split_when_it_fits():
     header = ["Metric", "2025", "2024"]
     rows = [["Revenue", "100", "90"], ["Costs", "50", "45"]]
-    chunks = chunk_document(_doc([TableItem(12, header, rows)]))
+    chunks = chunk_document(_doc([_table(12, header, rows)]))
     assert len(chunks) == 1
     assert chunks[0].kind == "table"
     assert chunks[0].page_start == 12
@@ -80,7 +90,7 @@ def test_table_is_never_split_when_it_fits():
 def test_oversized_table_is_split_by_rows_with_header_repeated():
     header = ["Metric", "Value"]
     rows = [[f"Row {i}", "x" * 50] for i in range(80)]
-    chunks = chunk_document(_doc([TableItem(3, header, rows)]))
+    chunks = chunk_document(_doc([_table(3, header, rows)]))
     assert len(chunks) > 1
     for chunk in chunks:
         assert chunk.kind == "table"
@@ -90,8 +100,8 @@ def test_oversized_table_is_split_by_rows_with_header_repeated():
 
 def test_table_gets_preceding_paragraph_as_caption():
     items = [
-        TextItem(1, "Table 3: Workforce by region"),
-        TableItem(1, ["Region", "FTE"], [["EMEA", "1000"]]),
+        _text(1, "Table 3: Workforce by region"),
+        _table(1, ["Region", "FTE"], [["EMEA", "1000"]]),
     ]
     chunks = chunk_document(_doc(items))
     table_chunk = next(chunk for chunk in chunks if chunk.kind == "table")

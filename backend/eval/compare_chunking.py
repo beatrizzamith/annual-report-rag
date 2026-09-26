@@ -1,18 +1,13 @@
-"""Empirically compares the production paragraph chunker against the
-experimental semantic chunker (`eval/semantic_chunk.py`), on the same gold
-set.
+"""Compares the production paragraph chunker with the experimental semantic chunker.
 
-Re-ingests every ready report's PDF into a second, throwaway SQLite database
-using the semantic chunker -- the real app database and its chunks are never
-touched -- then runs `eval.run_eval`'s exact retrieval/generation checks
-against both databases and prints a side-by-side comparison.
+Re-ingests every ready report into a throwaway database using the semantic
+chunker (the real database is never touched), runs the same eval against both,
+and logs the results side by side.
 
     python -m eval.compare_chunking
 
-Requires a gold set already built (`python -m eval.build_gold_set`) and
-ready reports already ingested in the real database (their PDFs are re-read
-from `settings.pdfs_dir`, so re-ingestion costs one parse + one full
-re-embed per report, same as a normal upload).
+Needs a gold set (`python -m eval.build_gold_set`); each report's PDF is
+re-parsed and re-embedded.
 """
 
 import argparse
@@ -28,10 +23,10 @@ from app.ingestion.embed import embed_and_index_report
 from app.ingestion.parse import parse_pdf
 from app.llm.client import LLMClient, build_llm_client
 from app.retrieval.vector_index import VectorIndex
-from eval.run_eval import print_report, run_eval, summarize
+from eval.console import configure_console_logging
+from eval.run_eval import format_report, run_eval, summarize
 from eval.semantic_chunk import chunk_document_semantic
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -52,11 +47,9 @@ def _delete_database(db_path: Path) -> None:
 def rebuild_with_semantic_chunker(db_path: Path, settings: Settings, llm: LLMClient) -> None:
     """Re-ingests every ready report into a fresh database, chunked semantically.
 
-    Reads each report's PDF from `settings.pdfs_dir` (the same files the
-    real database's rows point at) and re-runs parse, chunk and embed with
-    `chunk_document_semantic` in place of the production chunker. Extraction
-    (FTE, goals) is skipped -- `run_eval` only exercises retrieval and chat
-    generation, neither of which reads the extractions table.
+    Re-runs parse, chunk and embed on each report's stored PDF, using the
+    semantic chunker. Extraction is skipped: the eval only exercises retrieval
+    and chat, which don't read the extractions table.
 
     Args:
         db_path: Where to create the new database. Deleted first if it
@@ -104,6 +97,7 @@ def rebuild_with_semantic_chunker(db_path: Path, settings: Settings, llm: LLMCli
 
 def main() -> None:
     """CLI entry point: rebuilds the semantic database, runs both evals, compares."""
+    configure_console_logging(logger)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--gold-set",
@@ -128,11 +122,11 @@ def main() -> None:
 
     logger.info("\n=== Paragraph chunking (production) ===")
     paragraph_results = run_eval(gold_set_path)
-    print_report(paragraph_results)
+    logger.info("%s", format_report(paragraph_results))
 
     logger.info("\n=== Semantic chunking (experimental) ===")
     semantic_results = run_eval(gold_set_path, db_path=semantic_db_path)
-    print_report(semantic_results)
+    logger.info("%s", format_report(semantic_results))
 
     comparison = {
         "paragraph": summarize(paragraph_results),
@@ -140,7 +134,7 @@ def main() -> None:
     }
     out_path = settings.data_dir / "eval" / "chunking_comparison.json"
     out_path.write_text(json.dumps(comparison, indent=2), encoding="utf-8")
-    print(f"\nWrote comparison to {out_path}")
+    logger.info("\nWrote comparison to %s", out_path)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,34 @@ def _report_dict(
     }
 
 
+def _schedule_ingestion(background_tasks: BackgroundTasks, state: AppState, report: Report) -> None:
+    """Queues ingestion for a report, or fails it fast when no LLM is configured.
+
+    Args:
+        background_tasks: FastAPI's background task queue.
+        state: The shared application state.
+        report: The report that still needs ingesting.
+
+    Raises:
+        LLMUnavailableError: No LLM provider is configured; the report is
+            marked failed so a re-upload retries it once a key is added.
+    """
+    if state.llm is None:
+        ReportsRepo(state.conn).mark_failed(
+            report.id, "llm_auth_failed: no LLM provider configured"
+        )
+        logger.warning(
+            "report upload rejected: llm not configured",
+            extra={"extra_fields": {"report_id": report.id}},
+        )
+        raise LLMUnavailableError(
+            "No LLM provider is configured; add an API key to .env and re-upload."
+        )
+    background_tasks.add_task(
+        run_ingestion, report.id, state.settings, state.conn, state.vector_index, state.llm
+    )
+
+
 @router.post("/reports")
 async def upload_report(
     background_tasks: BackgroundTasks,
@@ -100,25 +128,7 @@ async def upload_report(
     )
 
     if result.needs_ingestion:
-        if state.llm is None:
-            reports_repo.mark_failed(
-                result.report.id, "llm_auth_failed: no LLM provider configured"
-            )
-            logger.warning(
-                "report upload rejected: llm not configured",
-                extra={"extra_fields": {"report_id": result.report.id}},
-            )
-            raise LLMUnavailableError(
-                "No LLM provider is configured; add an API key to .env and re-upload."
-            )
-        background_tasks.add_task(
-            run_ingestion,
-            result.report.id,
-            state.settings,
-            state.conn,
-            state.vector_index,
-            state.llm,
-        )
+        _schedule_ingestion(background_tasks, state, result.report)
 
     status_code = 200 if not result.needs_ingestion and result.report.status == "ready" else 202
     logger.info(
@@ -161,7 +171,7 @@ def list_reports(state: AppState = Depends(get_state)) -> list[dict]:
             "sustainability_goal": sum(1 for i in items if i.kind == "sustainability_goal"),
         }
     logger.info("reports listing requested", extra={"extra_fields": {"count": len(reports)}})
-    return [_report_dict(r, counts) for r in reports]
+    return [_report_dict(report, counts) for report in reports]
 
 
 @router.get("/reports/{report_id}/extractions")

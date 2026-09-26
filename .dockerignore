@@ -7,5 +7,6 @@ backend/data/
 frontend/node_modules/
 frontend/dist/
 data/
+data-app/
 .git/
 .env

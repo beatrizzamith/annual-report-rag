@@ -1,13 +1,8 @@
-"""Builds a gold-standard question set from a report's own chunks, for
-evaluating retrieval and generation (see `eval/run_eval.py`).
-
-Run against reports already ingested into the real database:
+"""Builds a gold question set from the reports' own chunks, for `eval/run_eval.py`.
 
     python -m eval.build_gold_set
 
-Read-only against the app database: only SELECT queries are issued (via
-`ReportsRepo`/`ChunksRepo`), so it never touches real chat history or
-report data.
+Read-only against the app database.
 """
 
 import argparse
@@ -25,16 +20,13 @@ from app.db.models import Chunk, Report
 from app.db.repositories import ChunksRepo, ReportsRepo
 from app.extraction.verifier import verify_quote
 from app.llm.client import LLMClient, build_llm_client
+from eval.console import configure_console_logging
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 DEFAULT_SAMPLES_PER_REPORT = 6
-# Below the report-wide median chunk length (see chunk.py's ~1800-char
-# target): a short chunk is disproportionately likely to be a table of
-# contents entry, a cover page, or a disclosure index rather than real
-# prose or a populated table, and the model correctly (but wastefully)
-# marks most of those `usable=False`.
+# Short chunks are mostly cover pages or contents entries, which the model
+# rejects as unusable anyway, so skip them up front.
 MIN_CHUNK_CHARS = 400
 
 
@@ -72,19 +64,17 @@ def _sample_chunks(chunks: list[Chunk], sample_size: int) -> list[Chunk]:
         the rest text chunks spread evenly across the report rather than
         clustered at the start.
     """
-    usable_chunks = [c for c in chunks if len(c.text) >= MIN_CHUNK_CHARS]
+    usable_chunks = [chunk for chunk in chunks if len(chunk.text) >= MIN_CHUNK_CHARS]
     if len(usable_chunks) <= sample_size:
         return usable_chunks
 
     sample = []
-    table_chunks = [c for c in usable_chunks if c.kind == "table"]
+    table_chunks = [chunk for chunk in usable_chunks if chunk.kind == "table"]
     if table_chunks:
-        # Longest table text is a simple proxy for "most populated with
-        # real data", as opposed to a sparse disclosure index with mostly
-        # blank cells.
-        sample.append(max(table_chunks, key=lambda c: len(c.text)))
+        # The longest table is a proxy for the one with the most real data.
+        sample.append(max(table_chunks, key=lambda chunk: len(chunk.text)))
 
-    text_chunks = [c for c in usable_chunks if c.kind == "text"]
+    text_chunks = [chunk for chunk in usable_chunks if chunk.kind == "text"]
     remaining = max(0, sample_size - len(sample))
     step = max(1, len(text_chunks) // remaining) if remaining else 1
     sample.extend(text_chunks[::step][:remaining])
@@ -167,6 +157,7 @@ def build_gold_set(samples_per_report: int) -> list[GoldSetEntry]:
 
 def main() -> None:
     """CLI entry point: parses arguments, builds the gold set, writes it to disk."""
+    configure_console_logging(logger)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--samples-per-report",

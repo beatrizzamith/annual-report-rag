@@ -1,6 +1,7 @@
 """FastAPI app factory and startup/shutdown lifecycle (DB connect, vector index, LLM client)."""
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import chat, health, reports
 from app.api.deps import AppState, build_vector_index
 from app.config import get_settings
-from app.core.errors import AppError
+from app.core.errors import AppError, LLMAuthFailedError
 from app.core.logging import configure_logging
 from app.db.connection import connect, mark_interrupted_reports_failed
 from app.db.repositories import MessagesRepo
@@ -21,21 +22,21 @@ from app.llm.client import build_llm_client
 
 logger = logging.getLogger(__name__)
 
-# Populated by the Docker build: the built frontend's static assets. When
-# these are absent during local development, Vite serves the frontend and
-# proxies /api requests to this backend.
+# Built frontend assets, present only in the Docker image; in development
+# Vite serves the frontend and proxies /api here.
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# Not a `Settings` field: `create_app()` runs at import, which must not load config.
+CORS_ORIGINS = ["http://localhost:5173", "http://localhost:8000"]
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Builds the shared `AppState` on startup and closes it on shutdown.
 
-    Connects to SQLite, marks any report interrupted by a previous restart
-    as `failed`, clears chat history from previous runs, loads existing
-    embeddings into an in-memory vector index, and builds the LLM client
-    (or leaves it None if not configured, so the app still starts and
-    reports the problem via `/api/health`).
+    Connects to SQLite, fails reports interrupted by a restart, clears old chat
+    history, loads embeddings into the vector index, and builds the LLM client
+    (None if unconfigured, so the app still starts and `/api/health` reports it).
 
     Args:
         app: The FastAPI application being started.
@@ -51,10 +52,8 @@ async def lifespan(app: FastAPI):
             extra={"extra_fields": {"count": interrupted}},
         )
 
-    # *(decision)* Chat is the one thing that starts fresh on every run,
-    # unlike reports/chunks/extractions (still all on disk and reloaded
-    # above/below): a restart is a natural "new conversation" boundary, and
-    # nothing else in the app depends on chat history surviving one.
+    # A restart is a natural "new conversation" boundary, so chat history
+    # (unlike reports and extractions) starts fresh on every run.
     MessagesRepo(conn).delete_all()
 
     vector_index = build_vector_index(conn, settings.embedding_dim)
@@ -62,7 +61,7 @@ async def lifespan(app: FastAPI):
 
     try:
         llm = build_llm_client(settings)
-    except Exception as exc:
+    except LLMAuthFailedError as exc:
         logger.warning(
             "LLM client not configured; ingestion and chat will fail until it is",
             extra={"extra_fields": {"error": str(exc)}},
@@ -119,7 +118,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:8000"],
+        allow_origins=CORS_ORIGINS,
         allow_methods=["*"],
         allow_headers=["*"],
     )

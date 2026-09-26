@@ -99,13 +99,8 @@ def multi_query_search(
 ) -> list[int]:
     """Runs `hybrid_search` for each query and fuses the results into one list.
 
-    Pre-extraction issues several targeted queries per field to improve
-    recall; this is what lets it do so with one fused result.
-
-    Embeds every query in a single batched call rather than one call per
-    query — an embedding call is a network round trip, and pre-extraction's
-    5-8 queries otherwise serialise that latency one after another for no
-    benefit (the embedding model batches a request's texts internally).
+    Extraction uses several phrasings per field to improve recall. Every
+    query is embedded in one batched call, not one network round trip each.
 
     Args:
         queries: The queries to run, e.g. several phrasings for "FTE".

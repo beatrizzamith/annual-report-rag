@@ -382,12 +382,8 @@ class ExtractionsRepo:
     def list_all(self) -> list[Extraction]:
         """Lists every extracted item across all reports.
 
-        Used to re-run verification against the current `verify_quote`
-        logic without re-running extraction itself (see
-        `eval/reverify_extractions.py`) -- a quote and its source chunk
-        never change after ingestion, only the verification rules do, so
-        there's no need to touch the LLM-extracted content to refresh
-        `verified`.
+        Used by `eval/reverify_extractions.py` to refresh `verified` without
+        re-running extraction.
 
         Returns:
             Every extracted item, ordered by report and kind.
@@ -455,12 +451,13 @@ class MessagesRepo:
         Returns:
             Chat messages in chronological order.
         """
-        sql = "SELECT * FROM messages ORDER BY id"
         if limit:
-            sql += f" DESC LIMIT {int(limit)}"
-        rows = self.conn.execute(sql).fetchall()
-        messages = [Message(**dict(row)) for row in rows]
-        return list(reversed(messages)) if limit else messages
+            rows = self.conn.execute(
+                "SELECT * FROM messages ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [Message(**dict(row)) for row in reversed(rows)]
+        rows = self.conn.execute("SELECT * FROM messages ORDER BY id").fetchall()
+        return [Message(**dict(row)) for row in rows]
 
     def delete_all(self) -> None:
         """Deletes every chat message to start a fresh conversation."""

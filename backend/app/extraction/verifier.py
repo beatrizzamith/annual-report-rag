@@ -7,7 +7,8 @@ appears inside the quote.
 """
 
 import re
-from dataclasses import dataclass
+
+from pydantic import BaseModel
 
 from app.core.text import normalize_text, parse_number
 
@@ -17,24 +18,13 @@ _NON_WORD_RUN = re.compile(r"[^a-z0-9]+")
 def _canonical_form(text: str) -> str:
     """Reduces text to its words and numbers only, padded for boundary-safe matching.
 
-    Hyphens are deleted outright rather than turned into a separator: PDF
-    line-wraps and our own de-hyphenation sometimes eat a compound word's
-    hyphen on one side but not the other (a real case: source stored as
-    "wellbelow-2C", quote faithfully written "well-below-2C") -- both sides
-    need every hyphen gone to line back up. Every *other* run of
-    punctuation or whitespace (periods, commas, footnote brackets, a
-    chunker-inserted "\\n\\n" paragraph gap) becomes exactly one space
-    instead: a quote and source that agree on every word but disagree on
-    how it's punctuated or line-wrapped should match, but two words must
-    never be allowed to fuse into one, or a genuinely different number
-    could look like a match (e.g. deleting the space in "2030s" would
-    make it indistinguishable from "2030").
+    Hyphens are deleted, not turned into spaces: a PDF line-wrap can eat a
+    compound word's hyphen on one side only, so both sides must lose every
+    hyphen to line up. Any other run of punctuation or whitespace becomes one
+    space, so words never fuse ("2030s" must not look like "2030").
 
-    The result is padded with a leading and trailing space so a caller
-    doing a plain substring check gets word-boundary safety for free: for
-    `_canonical_form(quote)` to be found inside `_canonical_form(source)`,
-    the match must be flanked by real word boundaries on both sides, not
-    just happen to be a prefix of a longer word or number in the source.
+    The leading and trailing space make a plain substring check
+    word-boundary safe: a match cannot start or end mid-word or mid-number.
 
     Args:
         text: Raw text -- a quote or a source chunk -- to canonicalise.
@@ -49,18 +39,11 @@ def _canonical_form(text: str) -> str:
 
 
 def verify_quote(quote: str | None, source_text: str) -> bool:
-    """Checks whether a quoted snippet appears in the source text after canonicalisation.
+    """Checks whether a quoted snippet appears in the source text.
 
-    Compares the quote and source in a canonical form that ignores
-    hyphenation, whitespace and punctuation differences (see
-    `_canonical_form`) -- covering, in one pass, every specific gap this
-    project has hit in practice: a PDF line-wrap eating a compound word's
-    hyphen, a paragraph break re-introduced where a sentence was actually
-    continuous, and a model closing a truncated quote with a period the
-    source doesn't have there. It only ever treats two texts as matching
-    because they agree on every word and number, never because a wrong
-    word or a different number happens to look similar once punctuation is
-    stripped away.
+    Both are compared in canonical form (see `_canonical_form`), so
+    hyphenation, whitespace and punctuation differences don't matter. Two
+    texts match only if they agree on every word and number.
 
     Args:
         quote: The quoted text to verify.
@@ -90,8 +73,9 @@ def verify_value_in_quote(value_text: str | None, quote: str | None) -> bool:
     return normalize_text(value_text) in normalize_text(quote)
 
 
-@dataclass
-class VerificationResult:
+class VerificationResult(BaseModel):
+    """Outcome of verifying one quote and its claimed value against a source."""
+
     verified: bool
     value: float | None
 
@@ -101,11 +85,8 @@ def _verify_quote_and_value(
 ) -> VerificationResult:
     """Verifies a claimed quote and value against the canonical source text.
 
-    Shared implementation behind `verify_citation` and `verify_extraction`:
-    the check itself is identical either way, only what's calling it
-    differs, so the public API is two correctly-named wrappers over this
-    one private function rather than one function named after just one of
-    its callers.
+    Shared by `verify_citation` and `verify_extraction`, which differ only
+    in name.
 
     Args:
         quote: The alleged quote to check.

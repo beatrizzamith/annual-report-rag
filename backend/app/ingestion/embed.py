@@ -11,13 +11,9 @@ from app.retrieval.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 
-# Fewer, larger batches mean fewer sequential network round trips per
-# report. 256 chunks at up to 700 tokens each is at most ~180k tokens per
-# request, comfortably under embedding endpoints' per-request limits (which
-# cap at 2048 items regardless). Diminishing returns past this: measured on
-# a 462-page report, the whole embed stage was ~15% of total ingestion time,
-# dwarfed by parsing — bigger batches shave seconds off a bottleneck that
-# isn't the bottleneck.
+# Larger batches mean fewer network round trips; 256 chunks stays well under
+# the embedding endpoint's per-request limits. Embedding is a small share of
+# ingestion time, so bigger batches would gain little.
 BATCH_SIZE = 256
 
 
@@ -65,7 +61,7 @@ def embed_and_index_report(
         on_progress: Optional callback invoked with the completion fraction
             (in [0, 1]) after each batch.
     """
-    chunks = [c for c in chunks_repo.get_by_report(report_id) if c.embedding is None]
+    chunks = [chunk for chunk in chunks_repo.get_by_report(report_id) if chunk.embedding is None]
     total = len(chunks)
     if total == 0:
         if on_progress:
@@ -75,11 +71,10 @@ def embed_and_index_report(
     done = 0
     for start in range(0, total, BATCH_SIZE):
         batch = chunks[start : start + BATCH_SIZE]
-        vectors = llm.embed([c.embed_text for c in batch])
+        vectors = llm.embed([chunk.embed_text for chunk in batch])
         for chunk, vector in zip(batch, vectors, strict=True):
             chunks_repo.set_embedding(chunk.id, vector_to_blob(vector))
-        # One add_many per batch, not one add() per chunk (see VectorIndex.add_many).
-        vector_index.add_many([c.id for c in batch], vectors)
+        vector_index.add_many([chunk.id for chunk in batch], vectors)
         chunks_repo.commit()
         done += len(batch)
         if on_progress:

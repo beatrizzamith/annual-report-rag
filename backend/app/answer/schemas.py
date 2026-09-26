@@ -2,45 +2,44 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+AnswerStatus = Literal["answered", "partial", "not_found"]
 
 
 class Citation(BaseModel):
     """One piece of evidence backing an inline [S3]-style citation in an answer.
 
-    Every inline citation must have one of these, so a citation can always
-    be inspected. `label`/`value_text`/`unit`/`period` are only filled in
-    when the citation backs a specific figure; a citation for descriptive,
-    non-numeric prose leaves them empty and carries just the quote.
+    `label`/`value_text`/`unit`/`period` are only filled in when the citation
+    backs a specific figure; a non-numeric one carries just the quote.
 
-    Field order matters here, not just for readability: structured output
-    is generated in schema-declaration order, so `source_id`/`quote` are
-    declared before the derived fields deliberately -- the model copies the
-    real source text first, then derives label/value/unit/period *from*
-    that already-copied quote, rather than writing a claim first and having
-    to retrofit a supporting quote for it afterwards (the pattern behind a
-    real fabricated-quote case this project hit: an accurate claim backed
-    by a quote that did not actually appear anywhere in the source).
+    Field order matters: the model generates fields in declaration order, so
+    `quote` comes first and the model copies real source text before deriving
+    values from it, instead of writing a claim and then inventing a quote.
     """
 
-    source_id: str  # "S3"
-    quote: str  # verbatim sentence or table row backing the citation
-    label: str | None = None  # "Climate change adaptation spend"
-    value_text: str | None = None  # exactly as printed: "USD 312 million"
+    source_id: str = Field(description='The source tag this evidence comes from, e.g. "S3".')
+    quote: str = Field(description="Verbatim sentence or table row backing the citation.")
+    label: str | None = Field(
+        default=None, description='What the figure is, e.g. "Climate change adaptation spend".'
+    )
+    value_text: str | None = Field(
+        default=None, description='The figure exactly as printed, e.g. "USD 312 million".'
+    )
     unit: str | None = None
-    period: str | None = None  # "FY2025"
+    period: str | None = Field(default=None, description='The period it covers, e.g. "FY2025".')
 
 
 class ModelAnswer(BaseModel):
     """The model's full structured response to a question.
 
-    Field order matters here too, for the same reason as `Citation`:
-    `citations` is declared before `answer` so the model selects and copies
-    its evidence first, then writes prose constrained to what it already
-    committed to as verbatim -- not the other way around.
+    As in `Citation`, order matters: `citations` comes before `answer`, so
+    the model commits to its evidence first and then writes prose around it.
     """
 
-    citations: list[Citation] = []
-    status: Literal["answered", "partial", "not_found"]
-    answer: str  # plain text, cites sources inline as [S3]
-    caveats: list[str] = []  # e.g. "Report covers FY2024, not 2025"
+    citations: list[Citation] = Field(default_factory=list)
+    status: AnswerStatus
+    answer: str = Field(description="Plain text that cites its sources inline as [S3].")
+    caveats: list[str] = Field(
+        default_factory=list, description='Warnings, e.g. "Report covers FY2024, not 2025".'
+    )

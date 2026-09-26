@@ -1,17 +1,16 @@
 """Builds the evidence text passed to the model in a token-limited format."""
 
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 
 from app.db.models import Chunk, Report
 
 CHARS_PER_TOKEN = 4
 
 
-@dataclass
-class AssembledSource:
+class AssembledSource(BaseModel):
     """One chunk selected for the model's context, tagged with a source id."""
 
-    source_id: str
+    source_id: str = Field(description='Tag the model cites, e.g. "S3".')
     chunk_id: int
     report_label: str
     company: str

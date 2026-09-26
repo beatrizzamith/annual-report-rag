@@ -63,7 +63,7 @@ def build_fts_query(text: str) -> str:
         if `text` contains no usable tokens.
     """
     tokens = _TOKEN.findall(text.lower())
-    keywords = [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
+    keywords = [token for token in tokens if token not in _STOPWORDS and len(token) > 1]
     if not keywords:
         keywords = tokens
     if not keywords:

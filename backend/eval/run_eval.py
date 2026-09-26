@@ -1,12 +1,9 @@
-"""Runs the gold set built by `eval/build_gold_set.py` against the real
-retrieval and generation pipeline, and reports hit rates for both.
+"""Runs the gold set through the real retrieval and generation pipeline and reports hit rates.
 
     python -m eval.run_eval
 
-Runs against a temporary *copy* of the app database (via SQLite's backup
-API, so in-progress WAL writes are copied correctly), never the live one:
-`answer_question` persists messages as a side effect, and this must not
-inject eval questions into a user's real chat history.
+Runs against a temporary copy of the database: `answer_question` stores
+messages, and an eval must not add its questions to the real chat history.
 """
 
 import argparse
@@ -14,28 +11,28 @@ import json
 import logging
 import sqlite3
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import BaseModel, Field
 
 from app.answer.service import CONTEXT_TOP_K, SEARCH_TOP_K, answer_question
 from app.api.deps import build_vector_index
 from app.config import get_settings
-from app.core.text import normalize_text
 from app.db.connection import connect
 from app.db.models import Report
 from app.db.repositories import ChunksRepo, ReportsRepo
+from app.extraction.verifier import verify_quote
 from app.llm.client import LLMClient, build_llm_client
 from app.retrieval.hybrid import hybrid_search
 from app.retrieval.scope import scope_reports
 from app.retrieval.vector_index import VectorIndex
 from eval.build_gold_set import GoldSetEntry
+from eval.console import configure_console_logging
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")  # quiet the app's own INFO logs
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class QuestionResult:
+class QuestionResult(BaseModel):
     """One gold question's outcome against retrieval and generation."""
 
     question: str
@@ -43,23 +40,26 @@ class QuestionResult:
     page_start: int
     retrieval_hit: bool
     answer_status: str
-    generation_grounded: bool  # a verified citation backs the expected quote
+    generation_grounded: bool = Field(
+        description="True when a verified citation backs the expected quote."
+    )
 
 
-def _quotes_overlap(a: str, b: str) -> bool:
+def _quotes_overlap(first_quote: str, second_quote: str) -> bool:
     """Checks whether two quotes plausibly refer to the same source text.
 
+    Uses the app's own verification comparison, so it ignores the same
+    punctuation, whitespace and table-formatting differences the gold set's
+    expected quotes were validated with.
+
     Args:
-        a: A quote.
-        b: Another quote to compare it against.
+        first_quote: A quote.
+        second_quote: Another quote to compare it against.
 
     Returns:
-        True if either, once normalised, is a substring of the other. Two
-        verbatim quotes drawn from the same sentence or table row satisfy
-        this even when they were not extracted identically.
+        True if either quote is found inside the other.
     """
-    a_norm, b_norm = normalize_text(a), normalize_text(b)
-    return a_norm in b_norm or b_norm in a_norm
+    return verify_quote(first_quote, second_quote) or verify_quote(second_quote, first_quote)
 
 
 def _copy_database(source_path: Path) -> Path:
@@ -113,7 +113,8 @@ def _check_retrieval(
         top_k=SEARCH_TOP_K,
         final_top_k=CONTEXT_TOP_K,
     )
-    retrieved_chunks = [c for c in (chunks_repo.get(cid) for cid in chunk_ids) if c is not None]
+    looked_up_chunks = [chunks_repo.get(chunk_id) for chunk_id in chunk_ids]
+    retrieved_chunks = [chunk for chunk in looked_up_chunks if chunk is not None]
     return any(_quotes_overlap(entry["expected_quote"], chunk.text) for chunk in retrieved_chunks)
 
 
@@ -183,9 +184,9 @@ def summarize(results: list[QuestionResult]) -> dict:
         for `json.dump`.
     """
     total = len(results)
-    retrieval_hits = sum(r.retrieval_hit for r in results)
-    grounded = sum(r.generation_grounded for r in results)
-    not_found = sum(r.answer_status == "not_found" for r in results)
+    retrieval_hits = sum(result.retrieval_hit for result in results)
+    grounded = sum(result.generation_grounded for result in results)
+    not_found = sum(result.answer_status == "not_found" for result in results)
 
     return {
         "total": total,
@@ -196,52 +197,63 @@ def summarize(results: list[QuestionResult]) -> dict:
         "answered_not_found": not_found,
         "results": [
             {
-                "question": r.question,
-                "company": r.company,
-                "page_start": r.page_start,
-                "retrieval_hit": r.retrieval_hit,
-                "answer_status": r.answer_status,
-                "generation_grounded": r.generation_grounded,
+                "question": result.question,
+                "company": result.company,
+                "page_start": result.page_start,
+                "retrieval_hit": result.retrieval_hit,
+                "answer_status": result.answer_status,
+                "generation_grounded": result.generation_grounded,
             }
-            for r in results
+            for result in results
         ],
     }
 
 
-def print_report(results: list[QuestionResult]) -> None:
-    """Prints hit-rate summaries and every failing question, for manual review.
+def format_report(results: list[QuestionResult]) -> str:
+    """Formats hit-rate summaries and every failing question, for manual review.
 
     Args:
         results: Every gold question's outcome.
+
+    Returns:
+        A multi-line, human-readable report for the caller to log.
     """
     total = len(results)
     if total == 0:
-        print("No gold-set entries to evaluate.")
-        return
+        return "No gold-set entries to evaluate."
 
-    retrieval_hits = sum(r.retrieval_hit for r in results)
-    grounded = sum(r.generation_grounded for r in results)
-    not_found = sum(r.answer_status == "not_found" for r in results)
+    retrieval_hits = sum(result.retrieval_hit for result in results)
+    grounded = sum(result.generation_grounded for result in results)
+    not_found = sum(result.answer_status == "not_found" for result in results)
 
-    print(f"\n{total} gold-set questions")
-    print(f"  retrieval hit rate:   {retrieval_hits}/{total} ({retrieval_hits / total:.0%})")
-    print(f"  generation grounded:  {grounded}/{total} ({grounded / total:.0%})")
-    print(f"  answered not_found:   {not_found}/{total}")
+    lines = [
+        f"\n{total} gold-set questions",
+        f"  retrieval hit rate:   {retrieval_hits}/{total} ({retrieval_hits / total:.0%})",
+        f"  generation grounded:  {grounded}/{total} ({grounded / total:.0%})",
+        f"  answered not_found:   {not_found}/{total}",
+    ]
 
-    failures = [r for r in results if not r.retrieval_hit or not r.generation_grounded]
+    failures = [
+        result for result in results if not result.retrieval_hit or not result.generation_grounded
+    ]
     if failures:
-        print(f"\n{len(failures)} question(s) worth a manual look:")
-        for r in failures:
+        lines.append(f"\n{len(failures)} question(s) worth a manual look:")
+        for failure in failures:
             flags = []
-            if not r.retrieval_hit:
+            if not failure.retrieval_hit:
                 flags.append("retrieval miss")
-            if not r.generation_grounded:
+            if not failure.generation_grounded:
                 flags.append("ungrounded/unverified answer")
-            print(f'  [{", ".join(flags)}] {r.company} p.{r.page_start}: "{r.question}"')
+            lines.append(
+                f"  [{', '.join(flags)}] {failure.company} p.{failure.page_start}: "
+                f'"{failure.question}"'
+            )
+    return "\n".join(lines)
 
 
 def main() -> None:
-    """CLI entry point: parses arguments, runs the eval, prints the report."""
+    """CLI entry point: parses arguments, runs the eval, logs the report."""
+    configure_console_logging(logger)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--gold-set",
@@ -267,9 +279,9 @@ def main() -> None:
         )
 
     results = run_eval(args.gold_set)
-    print_report(results)
+    logger.info("%s", format_report(results))
     args.json_out.write_text(json.dumps(summarize(results), indent=2), encoding="utf-8")
-    print(f"\nWrote JSON report to {args.json_out}")
+    logger.info("\nWrote JSON report to %s", args.json_out)
 
 
 if __name__ == "__main__":

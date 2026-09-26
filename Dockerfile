@@ -1,5 +1,5 @@
 # Multi-stage build: compile the frontend, then serve it from the FastAPI
-# backend as static files (SPEC.md section 14.2) — one process, one port.
+# backend as static files — one process, one port.
 
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
@@ -26,4 +26,6 @@ ENV DATA_DIR=/data
 VOLUME ["/data"]
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# `--no-sync`: the environment was built above; without it `uv run` would try to
+# install the dev dependencies again every time the container starts.
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

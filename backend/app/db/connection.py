@@ -7,7 +7,7 @@ _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
 class FTS5NotSupportedError(RuntimeError):
-    pass
+    """The installed SQLite build lacks the FTS5 full-text search extension."""
 
 
 def check_fts5(conn: sqlite3.Connection) -> None:

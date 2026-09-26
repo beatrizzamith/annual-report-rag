@@ -50,13 +50,9 @@ def _join_hyphenated_word(match: re.Match[str]) -> str:
 def _dehyphenate(text: str) -> str:
     """Joins words split by a line-break hyphen, e.g. "sustain-\\nability".
 
-    Matches one or more consecutive newlines after the hyphen, not just
-    one: the same line-wrap can end up stored as a `"\\n\\n"` paragraph
-    break instead of a single `"\\n"` when the chunker treats the wrapped
-    fragment as its own paragraph (a real case: "water-\\n\\nstressed",
-    from a bullet whose second line PyMuPDF read as a separate block). The
-    word is split by the PDF layout either way, so both must rejoin the
-    same word.
+    Matches one or more newlines after the hyphen: the chunker can turn a
+    line-wrap into a `"\\n\\n"` paragraph break, and the word is split by
+    the layout either way.
 
     Args:
         text: Raw text that may contain hyphen-newline line breaks.

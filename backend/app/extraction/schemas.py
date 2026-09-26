@@ -2,39 +2,49 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FteExtraction(BaseModel):
-    """Field order matters, not just readability: structured output is
-    generated in schema-declaration order, so `quote`/`source_id` are
-    declared before the derived fields deliberately -- the model copies the
-    real source text (or finds none) first, then derives `found`/
-    `value_text`/`metric`/etc. *from* that already-copied quote, rather
-    than deciding there is a figure and retrofitting a supporting quote
-    for it afterwards.
+    """Structured output of the FTE extraction call.
+
+    Field order matters: the model generates fields in declaration order, so
+    `quote` comes first and the model copies real source text before deriving
+    the value from it.
     """
 
-    quote: str | None = None  # verbatim sentence or table row that contains value_text
-    source_id: str | None = None  # which supplied chunk the quote came from (S1..Sn)
+    quote: str | None = Field(
+        default=None, description="Verbatim sentence or table row that contains value_text."
+    )
+    source_id: str | None = Field(
+        default=None, description="Which supplied chunk the quote came from (S1..Sn)."
+    )
     found: bool
-    value_text: str | None = None  # exactly as printed, e.g. "103,100" or "approx. 43,000 FTE"
+    value_text: str | None = Field(
+        default=None, description='The figure exactly as printed, e.g. "103,100".'
+    )
     metric: Literal["fte", "headcount", "average_fte", "other"] = "other"
-    as_of: str | None = None  # "31 December 2025", "FY2025", "average 2025"
-    scope: str | None = None  # "Group, consolidated"
-    notes: str | None = None  # e.g. "Report gives headcount only, not FTE"
+    as_of: str | None = Field(
+        default=None, description='The date or period it applies to, e.g. "31 December 2025".'
+    )
+    scope: str | None = Field(
+        default=None, description='Who it covers, e.g. "Group, consolidated".'
+    )
+    notes: str | None = Field(
+        default=None, description='Caveats, e.g. "Report gives headcount only, not FTE".'
+    )
 
 
 class SustainabilityGoal(BaseModel):
-    """Field order matters here too, for the same reason as `FteExtraction`:
-    `quote`/`source_id` are declared before the derived fields, so the
-    model copies the real source text first and derives
-    `title`/`category`/`target`/etc. from it, not the other way around.
+    """One sustainability goal found in a report.
+
+    Field order matters, as in `FteExtraction`: `quote` and `source_id` come
+    first so the model copies real source text before deriving the rest.
     """
 
-    quote: str  # verbatim sentence(s) stating the goal
+    quote: str = Field(description="Verbatim sentence(s) stating the goal.")
     source_id: str
-    title: str  # short label written by the model, e.g. "Net-zero emissions"
+    title: str = Field(description='A short label, e.g. "Net-zero emissions".')
     category: Literal[
         "climate",
         "energy",
@@ -45,10 +55,14 @@ class SustainabilityGoal(BaseModel):
         "governance",
         "other",
     ]
-    target: str | None = None  # the target wording, copied verbatim if short
+    target: str | None = Field(
+        default=None, description="The target wording, copied verbatim if short."
+    )
     target_year: int | None = None
-    baseline: str | None = None  # e.g. "2019 levels"
+    baseline: str | None = Field(default=None, description='The baseline, e.g. "2019 levels".')
 
 
 class GoalsExtraction(BaseModel):
+    """Structured output of one goals-extraction call over a batch of chunks."""
+
     goals: list[SustainabilityGoal]

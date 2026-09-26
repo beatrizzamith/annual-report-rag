@@ -10,10 +10,10 @@ import os
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 
 import pymupdf
+from pydantic import BaseModel, Field
 
 from app.core.text import normalize_text
 
@@ -22,11 +22,9 @@ logger = logging.getLogger(__name__)
 MIN_PAGE_CHARS = 50
 _OVERLAP_THRESHOLD = 0.5  # fraction of a text block's area inside a table bbox to drop it
 
-# `page.find_tables()` is CPU-bound pure-Python work in PyMuPDF that does not
-# release the GIL (confirmed: threading gave zero speedup on this codebase's
-# reports), so cutting parse latency needs real processes, not threads. Below
-# `_MIN_PAGES_FOR_PARALLEL`, process start-up overhead isn't worth it and the
-# ordinary sequential loop runs instead.
+# `find_tables()` is CPU-bound and holds the GIL (threads gave no speedup), so
+# large reports parse in worker processes. Below this many pages, process
+# start-up costs more than it saves.
 _MIN_PAGES_FOR_PARALLEL = 20
 _PAGES_PER_TASK = 5  # amortises each worker's one-time `pymupdf.open()` over several pages
 _MAX_WORKERS = 8  # bounds memory: each worker holds its own open copy of the PDF
@@ -36,27 +34,22 @@ _MAX_WORKERS = 8  # bounds memory: each worker holds its own open copy of the PD
 _BOILERPLATE_PAGE_FRACTION = 0.5
 _BOILERPLATE_MIN_PAGES = 10
 
-# Gap (in points) between two blocks' x0 beyond which they are treated as
-# separate columns rather than indentation within the same column. Tuned so
-# that in-column indentation (quotes, bullets: up to ~30pt in this report's
-# grid) stays merged while real column gutters and the side-nav gap (~50pt+)
-# split correctly.
+# Gap (in points) between blocks' left edges beyond which they count as
+# separate columns. In-column indentation (bullets, quotes) stays below it.
 _COLUMN_GAP_THRESHOLD = 40.0
 
 
-@dataclass
-class TextItem:
+class TextItem(BaseModel):
     """One paragraph of body text, in reading order."""
 
     page: int
-    text: str  # single cleaned paragraph, no embedded newlines
+    text: str = Field(description="One cleaned paragraph, with no embedded newlines.")
     x0: float = 0.0
     y0: float = 0.0
     region_index: int = 0
 
 
-@dataclass
-class TableItem:
+class TableItem(BaseModel):
     """One detected table, in reading order."""
 
     page: int
@@ -70,8 +63,7 @@ class TableItem:
 ParsedItem = TextItem | TableItem
 
 
-@dataclass
-class ParsedDocument:
+class ParsedDocument(BaseModel):
     """The full output of parsing one PDF."""
 
     items: list[ParsedItem]
@@ -210,7 +202,7 @@ def _region_for(x0: float, column_starts: list[float]) -> int:
     return region
 
 
-def _collect_boilerplate_texts(doc: "pymupdf.Document") -> set[str]:
+def _collect_boilerplate_texts(document: "pymupdf.Document") -> set[str]:
     """Finds text blocks that repeat verbatim across most pages.
 
     Running headers/footers and side-navigation chrome (chapter menus,
@@ -219,14 +211,14 @@ def _collect_boilerplate_texts(doc: "pymupdf.Document") -> set[str]:
     interleave with real paragraphs once sorted by position.
 
     Args:
-        doc: The open PDF document.
+        document: The open PDF document.
 
     Returns:
         The set of block texts that appear on at least half the document's
         pages (minimum `_BOILERPLATE_MIN_PAGES`).
     """
     page_counts: Counter[str] = Counter()
-    for page in doc:
+    for page in document:
         page_dict = page.get_text("dict", sort=True)
         texts_on_page = set()
         for block in page_dict.get("blocks", []):
@@ -237,7 +229,7 @@ def _collect_boilerplate_texts(doc: "pymupdf.Document") -> set[str]:
                 texts_on_page.add(text)
         page_counts.update(texts_on_page)
 
-    threshold = max(_BOILERPLATE_MIN_PAGES, int(doc.page_count * _BOILERPLATE_PAGE_FRACTION))
+    threshold = max(_BOILERPLATE_MIN_PAGES, int(document.page_count * _BOILERPLATE_PAGE_FRACTION))
     return {text for text, count in page_counts.items() if count >= threshold}
 
 
@@ -276,6 +268,71 @@ def _sort_items_for_reading_order(items: list[ParsedItem]) -> list[ParsedItem]:
     return sorted(items, key=_reading_order_key)
 
 
+def _detect_tables(
+    page: "pymupdf.Page", page_number: int
+) -> list[tuple["pymupdf.Rect", list[str], list[list[str]]]]:
+    """Finds a page's tables, each as its bounding box, header and rows.
+
+    A failure inside PyMuPDF's table detection is logged and treated as "no
+    tables on this page": the page's text is still parsed, just without
+    structured tables.
+
+    Args:
+        page: The page to search.
+        page_number: The page's 1-based physical page number, for logging.
+
+    Returns:
+        One `(bounding_box, header, rows)` tuple per usable table.
+    """
+    try:
+        found_tables = list(page.find_tables().tables)
+    except Exception:
+        logger.warning("table detection failed", extra={"extra_fields": {"page": page_number}})
+        return []
+
+    detected = []
+    for table in found_tables:
+        extracted = _extract_table_rows(table)
+        if extracted is None:
+            continue
+        header, rows = extracted
+        detected.append((pymupdf.Rect(table.bbox), header, rows))
+    return detected
+
+
+def _collect_text_blocks(
+    page: "pymupdf.Page", table_rects: list["pymupdf.Rect"], boilerplate: set[str]
+) -> list[tuple["pymupdf.Rect", str]]:
+    """Collects a page's plain-text blocks, minus tables and boilerplate.
+
+    Args:
+        page: The page to read text from.
+        table_rects: Bounding boxes of the page's detected tables.
+        boilerplate: Block texts to drop as running headers/footers or
+            side-navigation chrome.
+
+    Returns:
+        One `(bounding_box, text)` pair per kept block.
+    """
+    page_dict = page.get_text("dict", sort=True)
+    text_blocks = []
+    for block in page_dict.get("blocks", []):
+        if block.get("type") != 0:  # 0 = text block, 1 = image
+            continue
+        rect = pymupdf.Rect(block["bbox"])
+        overlaps_a_table = any(
+            _overlap_fraction(rect, table_rect) > _OVERLAP_THRESHOLD for table_rect in table_rects
+        )
+        if overlaps_a_table:
+            # Table cells are already captured as structured rows; keeping the
+            # overlapping text would duplicate the same numbers in plain text.
+            continue
+        text = _block_text(block)
+        if text and text not in boilerplate:
+            text_blocks.append((rect, text))
+    return text_blocks
+
+
 def _parse_page(page: "pymupdf.Page", page_number: int, boilerplate: set[str]) -> list[ParsedItem]:
     """Parses one page into text and table items, in reading order.
 
@@ -291,40 +348,9 @@ def _parse_page(page: "pymupdf.Page", page_number: int, boilerplate: set[str]) -
         detected table excluded (so table numbers are not duplicated as
         plain text) and boilerplate blocks dropped.
     """
-    tables = []
-    try:
-        table_finder = page.find_tables()
-        tables = list(table_finder.tables)
-    except Exception:
-        logger.warning("table detection failed", extra={"extra_fields": {"page": page_number}})
-
-    table_rects = []
-    pending_tables = []
-    for table in tables:
-        extracted = _extract_table_rows(table)
-        if extracted is None:
-            continue
-        header, rows = extracted
-        rect = pymupdf.Rect(table.bbox)
-        table_rects.append(rect)
-        pending_tables.append((rect, header, rows))
-
-    page_dict = page.get_text("dict", sort=True)
-    pending_text = []
-    for block in page_dict.get("blocks", []):
-        if block.get("type") != 0:  # 0 = text block, 1 = image
-            continue
-        rect = pymupdf.Rect(block["bbox"])
-        overlaps_a_table = any(
-            _overlap_fraction(rect, table_rect) > _OVERLAP_THRESHOLD for table_rect in table_rects
-        )
-        if overlaps_a_table:
-            # Table cells are already captured as structured rows; keeping the
-            # overlapping text would duplicate the same numbers in plain text.
-            continue
-        text = _block_text(block)
-        if text and text not in boilerplate:
-            pending_text.append((rect, text))
+    pending_tables = _detect_tables(page, page_number)
+    table_rects = [rect for rect, _, _ in pending_tables]
+    pending_text = _collect_text_blocks(page, table_rects, boilerplate)
 
     column_starts = _column_starts(
         [rect.x0 for rect, *_ in pending_tables] + [rect.x0 for rect, _ in pending_text]
@@ -332,9 +358,9 @@ def _parse_page(page: "pymupdf.Page", page_number: int, boilerplate: set[str]) -
 
     items = [
         TableItem(
-            page_number,
-            header,
-            rows,
+            page=page_number,
+            header=header,
+            rows=rows,
             x0=float(rect.x0),
             y0=float(rect.y0),
             region_index=_region_for(float(rect.x0), column_starts),
@@ -343,8 +369,8 @@ def _parse_page(page: "pymupdf.Page", page_number: int, boilerplate: set[str]) -
     ]
     items.extend(
         TextItem(
-            page_number,
-            text,
+            page=page_number,
+            text=text,
             x0=float(rect.x0),
             y0=float(rect.y0),
             region_index=_region_for(float(rect.x0), column_starts),
@@ -405,9 +431,7 @@ def _page_ranges(page_count: int, pages_per_task: int) -> list[tuple[int, int]]:
     ]
 
 
-# Set by `_init_worker` in each pool worker process; a worker handles several
-# `_parse_page_task` calls, so the PDF is opened once per worker rather than
-# once per task.
+# Set by `_init_worker`: each worker opens the PDF once and reuses it across tasks.
 _worker_doc: "pymupdf.Document | None" = None
 
 
@@ -525,16 +549,10 @@ def _assemble_parsed_document(
 def parse_pdf(path: Path, on_progress: Callable[[float], None] | None = None) -> ParsedDocument:
     """Parses a PDF into per-page text and table items.
 
-    Table detection (`page.find_tables()`, run once per page) dominates
-    parsing time on table-heavy reports, so this reports progress as pages
-    complete rather than only at the end — without it, a large report can
-    sit at 0% for minutes with no visible sign it is working.
-
-    Reports under `_MIN_PAGES_FOR_PARALLEL` pages parse sequentially in this
-    process. Larger ones are split across a pool of worker processes (see
-    `_parse_pages_in_parallel`): table detection is CPU-bound work that does
-    not release the GIL, so it gains nothing from threads and needs real
-    processes to use more than one core.
+    Table detection dominates parse time, so progress is reported as pages
+    complete. Reports under `_MIN_PAGES_FOR_PARALLEL` pages parse in this
+    process; larger ones use a pool of worker processes (see
+    `_parse_pages_in_parallel`).
 
     Args:
         path: Path to the PDF file.
@@ -546,15 +564,15 @@ def parse_pdf(path: Path, on_progress: Callable[[float], None] | None = None) ->
         characters (likely image-only) are omitted from `items` and listed
         in `skipped_pages`.
     """
-    with pymupdf.open(path) as doc:
-        page_count = doc.page_count
-        boilerplate = _collect_boilerplate_texts(doc)
+    with pymupdf.open(path) as document:
+        page_count = document.page_count
+        boilerplate = _collect_boilerplate_texts(document)
         worker_count = _worker_count(page_count)
 
         if worker_count == 1:
             items_by_page = {}
             for page_number in range(1, page_count + 1):
-                page = doc[page_number - 1]
+                page = document[page_number - 1]
                 items_by_page[page_number] = _parse_page(page, page_number, boilerplate)
                 if on_progress:
                     on_progress(page_number / page_count)

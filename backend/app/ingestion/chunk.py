@@ -6,7 +6,9 @@ contaminating the stored quote text.
 """
 
 import re
-from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel
 
 from app.ingestion.parse import ParsedDocument, TableItem, TextItem
 
@@ -21,13 +23,12 @@ CAPTION_MAX_CHARS = 200
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
-@dataclass
-class PreparedChunk:
+class PreparedChunk(BaseModel):
     """One chunk ready to be stored and used for retrieval."""
 
     page_start: int
     page_end: int
-    kind: str  # text | table
+    kind: Literal["text", "table"]
     text: str
 
 
@@ -77,8 +78,8 @@ def _caption_from_paragraph(paragraph: str) -> str:
     paragraph = paragraph.strip()
     if len(paragraph) <= CAPTION_MAX_CHARS:
         return paragraph
-    parts = [p for p in _SENTENCE_SPLIT.split(paragraph) if p]
-    tail = parts[-1] if parts else paragraph
+    sentences = [sentence for sentence in _SENTENCE_SPLIT.split(paragraph) if sentence]
+    tail = sentences[-1] if sentences else paragraph
     return tail[-CAPTION_MAX_CHARS:]
 
 
@@ -120,17 +121,19 @@ def _split_long_paragraph(page: int, text: str) -> list[PreparedChunk]:
     overlap_chars = int(HARD_MAX_CHARS * OVERLAP_RATIO)
     prepared_chunks = []
     start = 0
-    n = len(text)
-    while start < n:
-        end = min(start + HARD_MAX_CHARS, n)
-        if end < n:
+    text_length = len(text)
+    while start < text_length:
+        end = min(start + HARD_MAX_CHARS, text_length)
+        if end < text_length:
             next_space = text.find(" ", end)
             if next_space != -1 and next_space - end < 50:
                 end = next_space
         piece = text[start:end].strip()
         if piece:
-            prepared_chunks.append(PreparedChunk(page, page, "text", piece))
-        if end >= n:
+            prepared_chunks.append(
+                PreparedChunk(page_start=page, page_end=page, kind="text", text=piece)
+            )
+        if end >= text_length:
             break
         start = max(end - overlap_chars, start + 1)
     return prepared_chunks
@@ -167,7 +170,7 @@ def _flush_paragraph_buffer(paragraph_buffer: list[tuple[int, str]]) -> Prepared
     page_start = paragraph_buffer[0][0]
     page_end = paragraph_buffer[-1][0]
     text = "\n\n".join(paragraph_text for _, paragraph_text in paragraph_buffer)
-    return PreparedChunk(page_start, page_end, "text", text)
+    return PreparedChunk(page_start=page_start, page_end=page_end, kind="text", text=text)
 
 
 def _pack_text_items(paragraph_buffer: list[tuple[int, str]]) -> list[PreparedChunk]:
@@ -201,9 +204,6 @@ def _pack_text_items(paragraph_buffer: list[tuple[int, str]]) -> list[PreparedCh
             and _paragraph_buffer_length(active_paragraphs) + 2 + len(text) > TARGET_CHARS
         )
         if would_exceed_target:
-            # Flush the current paragraph run before adding a larger one so each
-            # chunk stays close to the target size without breaking paragraph
-            # boundaries unnecessarily.
             flushed = _flush_paragraph_buffer(active_paragraphs)
             if flushed is not None:
                 prepared_chunks.append(flushed)
@@ -251,7 +251,9 @@ def _chunk_table(item: TableItem, caption: str | None) -> list[PreparedChunk]:
     """
     whole_text = _table_chunk_text(item.header, item.rows, caption)
     if len(whole_text) <= HARD_MAX_CHARS or not item.rows:
-        return [PreparedChunk(item.page, item.page, "table", whole_text)]
+        return [
+            PreparedChunk(page_start=item.page, page_end=item.page, kind="table", text=whole_text)
+        ]
 
     prepared_chunks = []
     current_rows = []
@@ -262,7 +264,11 @@ def _chunk_table(item: TableItem, caption: str | None) -> list[PreparedChunk]:
         if len(candidate_text) > HARD_MAX_CHARS and current_rows:
             flushed_caption = caption if not prepared_chunks else None
             flushed_text = _table_chunk_text(item.header, current_rows, flushed_caption)
-            prepared_chunks.append(PreparedChunk(item.page, item.page, "table", flushed_text))
+            prepared_chunks.append(
+                PreparedChunk(
+                    page_start=item.page, page_end=item.page, kind="table", text=flushed_text
+                )
+            )
             current_rows = [row]
         else:
             current_rows = candidate_rows
@@ -270,7 +276,9 @@ def _chunk_table(item: TableItem, caption: str | None) -> list[PreparedChunk]:
     if current_rows:
         flushed_caption = caption if not prepared_chunks else None
         flushed_text = _table_chunk_text(item.header, current_rows, flushed_caption)
-        prepared_chunks.append(PreparedChunk(item.page, item.page, "table", flushed_text))
+        prepared_chunks.append(
+            PreparedChunk(page_start=item.page, page_end=item.page, kind="table", text=flushed_text)
+        )
     return prepared_chunks
 
 
@@ -298,11 +306,9 @@ def _flush_paragraph_run(
 def chunk_document(parsed: ParsedDocument) -> list[PreparedChunk]:
     """Turns a parsed document into retrieval-ready chunks.
 
-    Paragraphs are packed together up to `TARGET_CHARS`; each table is kept
-    whole (or split by rows if oversized) and prefixed with the paragraph
-    that precedes it as a caption. A region change is treated as a natural
-    chunk boundary so left-column and right-column content do not collapse
-    into a single annual-report paragraph block.
+    Paragraphs are packed up to `TARGET_CHARS`; each table is kept whole (or
+    split by rows if oversized) with the preceding paragraph as its caption.
+    A page-region change ends a chunk, so columns don't merge.
 
     Args:
         parsed: The document's parsed text and table items, in reading

@@ -38,9 +38,6 @@ def build_vector_index(conn: sqlite3.Connection, dim: int) -> VectorIndex:
     """
     chunks = ChunksRepo(conn).all_with_embeddings()
     index = VectorIndex(dim)
-    # One batched add_many, not one add() per chunk: with thousands of
-    # chunks now indexed, adding them one at a time made this O(N^2) and
-    # was the main cause of a slow app startup.
     ids = [chunk.id for chunk in chunks]
     vectors = [blob_to_vector(chunk.embedding) for chunk in chunks]
     index.add_many(ids, vectors)

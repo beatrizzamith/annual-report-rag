@@ -6,10 +6,11 @@ with a synchronous `.read(size)` method works, which keeps it easy to test.
 
 import hashlib
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import BinaryIO, Protocol
 from uuid import uuid4
+
+from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.core.errors import FileTooLargeError, InvalidFileError
@@ -36,11 +37,46 @@ class ReadableStream(Protocol):
         ...
 
 
+def _copy_validated(stream: ReadableStream, handle: BinaryIO, max_bytes: int) -> str:
+    """Copies `stream` into `handle` chunk by chunk, validating as it goes.
+
+    Args:
+        stream: The upload's readable stream.
+        handle: The open file to write the upload into.
+        max_bytes: The maximum allowed upload size, in bytes.
+
+    Returns:
+        The SHA-256 hex digest of everything copied.
+
+    Raises:
+        InvalidFileError: The stream is empty or does not start with the
+            PDF magic bytes.
+        FileTooLargeError: The stream exceeds `max_bytes`.
+    """
+    hasher = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = stream.read(_CHUNK_SIZE)
+        if not chunk:
+            break
+        if total == 0 and not chunk.startswith(_PDF_MAGIC):
+            raise InvalidFileError("File does not look like a PDF (missing %PDF- header)")
+        total += len(chunk)
+        if total > max_bytes:
+            raise FileTooLargeError(f"File exceeds the {max_bytes // (1024 * 1024)} MB limit")
+        hasher.update(chunk)
+        handle.write(chunk)
+    if total == 0:
+        raise InvalidFileError("Uploaded file is empty")
+    return hasher.hexdigest()
+
+
 def stream_to_temp_file(stream: ReadableStream, tmp_dir: Path, max_bytes: int) -> tuple[Path, str]:
     """Streams `stream` to a temp file while computing its SHA-256.
 
     Rejects non-PDF content and oversized uploads without buffering the
-    whole file in memory.
+    whole file in memory. A rejected upload's temp file is removed only
+    after it is closed: deleting an open file fails on Windows.
 
     Args:
         stream: The upload's readable stream.
@@ -57,32 +93,13 @@ def stream_to_temp_file(stream: ReadableStream, tmp_dir: Path, max_bytes: int) -
     """
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = tmp_dir / f"upload-{uuid4().hex}.tmp"
-    hasher = hashlib.sha256()
-    total = 0
-    seen_any = False
-
-    with open(tmp_path, "wb") as handle:
-        while True:
-            chunk = stream.read(_CHUNK_SIZE)
-            if not chunk:
-                break
-            if not seen_any:
-                if not chunk.startswith(_PDF_MAGIC):
-                    tmp_path.unlink(missing_ok=True)
-                    raise InvalidFileError("File does not look like a PDF (missing %PDF- header)")
-                seen_any = True
-            total += len(chunk)
-            if total > max_bytes:
-                tmp_path.unlink(missing_ok=True)
-                raise FileTooLargeError(f"File exceeds the {max_bytes // (1024 * 1024)} MB limit")
-            hasher.update(chunk)
-            handle.write(chunk)
-
-    if not seen_any:
+    try:
+        with open(tmp_path, "wb") as handle:
+            sha256 = _copy_validated(stream, handle, max_bytes)
+    except (InvalidFileError, FileTooLargeError):
         tmp_path.unlink(missing_ok=True)
-        raise InvalidFileError("Uploaded file is empty")
-
-    return tmp_path, hasher.hexdigest()
+        raise
+    return tmp_path, sha256
 
 
 def store_pdf(tmp_path: Path, sha256: str, pdfs_dir: Path) -> Path:
@@ -107,12 +124,13 @@ def store_pdf(tmp_path: Path, sha256: str, pdfs_dir: Path) -> Path:
     return final_path
 
 
-@dataclass
-class IntakeResult:
+class IntakeResult(BaseModel):
     """The outcome of `intake_upload`."""
 
     report: Report
-    needs_ingestion: bool  # False when an existing `ready` report was returned as-is
+    needs_ingestion: bool = Field(
+        description="False when an existing `ready` or `processing` report was returned as-is."
+    )
 
 
 def intake_upload(

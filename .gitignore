@@ -1,5 +1,6 @@
 .env
 data/
+data-app/
 SPEC.md
 run.ps1
 # Python

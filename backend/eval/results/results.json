@@ -1,0 +1,234 @@
+{
+  "total": 28,
+  "retrieval_hit_rate": 0.8214285714285714,
+  "retrieval_hits": 23,
+  "generation_grounded_rate": 0.6785714285714286,
+  "generation_grounded": 19,
+  "answered_not_found": 0,
+  "results": [
+    {
+      "question": "What is the basis for estimating proved reserves according to Shell's 2024 annual report?",
+      "company": "Shell",
+      "page_start": 250,
+      "retrieval_hit": false,
+      "answer_status": "answered",
+      "generation_grounded": false
+    },
+    {
+      "question": "What new section did Shell include in its 2024 report in anticipation of the Netherlands' transposition of the EU Corporate Sustainability Reporting Directive?",
+      "company": "Shell",
+      "page_start": 2,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "How many electric vehicle charge points did Shell add in 2024?",
+      "company": "Shell",
+      "page_start": 106,
+      "retrieval_hit": false,
+      "answer_status": "answered",
+      "generation_grounded": false
+    },
+    {
+      "question": "What is the final bonus outcome as a percentage of target for Shell in 2024?",
+      "company": "Shell",
+      "page_start": 197,
+      "retrieval_hit": true,
+      "answer_status": "partial",
+      "generation_grounded": false
+    },
+    {
+      "question": "What is the amount received from the captive structure in relation to pension plans reinsured in the Rest of the world by Shell in 2024?",
+      "company": "Shell",
+      "page_start": 295,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What did Shell's Mobility and US Midstream businesses develop in 2024 regarding water stewardship?",
+      "company": "Shell",
+      "page_start": 398,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What platform does CM.com offer to engage with consumers?",
+      "company": "CM",
+      "page_start": 2,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "How many members are there in CM's Supervisory Board?",
+      "company": "CM",
+      "page_start": 36,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is CM's target percentage of women in leadership roles for LTIP 2025-2027?",
+      "company": "CM",
+      "page_start": 61,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What new ISO certifications did CM.com obtain in 2025 related to data privacy and AI management?",
+      "company": "CM",
+      "page_start": 87,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is the expected settlement year for the balance as at December 31, 2024 for CM?",
+      "company": "CM",
+      "page_start": 124,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is the basis for estimating proved oil and gas reserves according to Shell's 2025 annual report?",
+      "company": "Shell",
+      "page_start": 239,
+      "retrieval_hit": false,
+      "answer_status": "answered",
+      "generation_grounded": false
+    },
+    {
+      "question": "What was Shell's target number of EV charge points for 2025?",
+      "company": "Shell",
+      "page_start": 189,
+      "retrieval_hit": false,
+      "answer_status": "partial",
+      "generation_grounded": false
+    },
+    {
+      "question": "What is the amount of plan assets that Shell settled through an insurance contract with a third-party company in the USA?",
+      "company": "Shell",
+      "page_start": 289,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": false
+    },
+    {
+      "question": "What framework recognizes the links between biodiversity and climate according to Shell's 2025 report?",
+      "company": "Shell",
+      "page_start": 385,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is the maximum period for which the General Meeting can authorize the Board of Management of ASML to issue shares?",
+      "company": "Asml",
+      "page_start": 85,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is ASML's target for scope 1 and 2 emission reduction by 2040?",
+      "company": "Asml",
+      "page_start": 157,
+      "retrieval_hit": false,
+      "answer_status": "answered",
+      "generation_grounded": false
+    },
+    {
+      "question": "What is ASML's ongoing ambition regarding work-related injuries and illness?",
+      "company": "Asml",
+      "page_start": 213,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is Heineken's goal for average water usage in water-stressed areas by 2030?",
+      "company": "Heineken",
+      "page_start": 177,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What was the amount of the 2025 exceptional items and amortisation of acquisition-related intangibles on net profit and loss for Heineken?",
+      "company": "Heineken",
+      "page_start": 49,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What was the total amount spent by Heineken on shares repurchased from minority shareholders from 13 February 2025 up to and including 31 December 2025?",
+      "company": "Heineken",
+      "page_start": 98,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What position did Heineken step into in 2025 within the Beverage Industry Environmental Roundtable (BIER)?",
+      "company": "Heineken",
+      "page_start": 158,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What does Heineken do to assess the effectiveness of its consumer engagement efforts?",
+      "company": "Heineken",
+      "page_start": 218,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What percentage of voting rights is generally presumed to indicate significant influence for ABN AMRO over associates?",
+      "company": "ABN",
+      "page_start": 349,
+      "retrieval_hit": true,
+      "answer_status": "partial",
+      "generation_grounded": false
+    },
+    {
+      "question": "What was the total year-on-year return for the Dutch quarterly MSCI property index in 2025 according to ABN?",
+      "company": "ABN",
+      "page_start": 94,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What regulations with notable impact on ABN's remuneration policies and reporting has the company implemented?",
+      "company": "ABN",
+      "page_start": 174,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What was the total facilitated amount in scope for ABN in 2025?",
+      "company": "ABN",
+      "page_start": 246,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": true
+    },
+    {
+      "question": "What is the most relevant input parameter for valuing equity release mortgages offered by ABN AMRO?",
+      "company": "ABN",
+      "page_start": 344,
+      "retrieval_hit": true,
+      "answer_status": "answered",
+      "generation_grounded": false
+    }
+  ]
+}
